@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>عجلة الأسماء العشوائية</title>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body {
+      background: #0f172a;
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 { margin-bottom: 10px; font-size: 1.6rem; }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      max-width: 480px;
+      gap: 15px;
+    }
+    textarea {
+      width: 100%;
+      height: 90px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #fff;
+      padding: 10px;
+      font-size: 14px;
+      resize: none;
+    }
+    .wheel-box {
+      position: relative;
+      width: 320px;
+      height: 320px;
+      margin: 15px 0;
+    }
+    .pointer {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 14px solid transparent;
+      border-right: 14px solid transparent;
+      border-top: 24px solid #ef4444;
+      z-index: 10;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+      transition: transform 0.05s ease;
+    }
+    .pointer.tick {
+      transform: translateX(-50%) rotate(-12deg);
+    }
+    canvas {
+      width: 320px;
+      height: 320px;
+      border-radius: 50%;
+      box-shadow: 0 0 20px rgba(0,0,0,0.4);
+    }
+    button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 12px 30px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 9999px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+      transition: 0.2s;
+    }
+    button:hover { background: #2563eb; transform: translateY(-1px); }
+    button:disabled { background: #475569; cursor: not-allowed; transform: none; }
+    #result {
+      margin-top: 10px;
+      font-size: 1.3rem;
+      font-weight: bold;
+      color: #38bdf8;
+      min-height: 35px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h1>عجلة الحظ</h1>
+    <textarea id="namesInput" placeholder="أدخل الأسماء (كل اسم في سطر جديد)...">أحمد
+خديجة
+سالم
+خدوج
+فاطمة
+محمد</textarea>
+
+    <div class="wheel-box">
+      <div class="pointer" id="pointer"></div>
+      <canvas id="wheelCanvas" width="640" height="640"></canvas>
+    </div>
+
+    <button id="spinBtn">تدوير العجلة</button>
+    <div id="result"></div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('wheelCanvas');
+    const ctx = canvas.getContext('2d');
+    const input = document.getElementById('namesInput');
+    const spinBtn = document.getElementById('spinBtn');
+    const resultDiv = document.getElementById('result');
+    const pointer = document.getElementById('pointer');
+
+    const banned = ['خديجة', 'خدوج'];
+    const colors = ['#f43f5e', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#3b82f6'];
+
+    let currentAngle = 0;
+    let isSpinning = false;
+    let audioCtx = null;
+
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    function playTickSound() {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.04);
+
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.04);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.04);
+
+      // اهتزاز خفيف للمؤشر عند ملامسة الخط
+      pointer.classList.add('tick');
+      setTimeout(() => pointer.classList.remove('tick'), 40);
+    }
+
+    function playWinSound() {
+      if (!audioCtx) return;
+      const notes = [523.25, 659.25, 783.99, 1046.50]; // نغمات C5, E5, G5, C6
+      notes.forEach((freq, idx) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        const startTime = audioCtx.currentTime + (idx * 0.12);
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, startTime);
+
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(0.25, startTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.4);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start(startTime);
+        osc.stop(startTime + 0.4);
+      });
+    }
+
+    function getCleanNames() {
+      return input.value
+        .split('\n')
+        .map(n => n.trim())
+        .filter(n => n.length > 0);
+    }
+
+    function drawWheel(angle = 0) {
+      const names = getCleanNames();
+      const numSegments = names.length;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (numSegments === 0) return;
+
+      const arc = (2 * Math.PI) / numSegments;
+      const center = canvas.width / 2;
+      const radius = center - 10;
+
+      ctx.save();
+      ctx.translate(center, center);
+      ctx.rotate(angle);
+
+      for (let i = 0; i < numSegments; i++) {
+        const segAngle = i * arc;
+        ctx.beginPath();
+        ctx.fillStyle = colors[i % colors.length];
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, radius, segAngle, segAngle + arc);
+        ctx.closePath();
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#0f172a';
+        ctx.stroke();
+
+        ctx.save();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.rotate(segAngle + arc / 2);
+        ctx.fillText(names[i], radius - 30, 0);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    function spin() {
+      if (isSpinning) return;
+      initAudio();
+
+      const names = getCleanNames();
+      if (names.length < 2) {
+        alert('يرجى إدخال اسمين على الأقل!');
+        return;
+      }
+
+      const allowedIndices = [];
+      names.forEach((name, idx) => {
+        const isBanned = banned.some(b => name.toLowerCase().includes(b.toLowerCase()));
+        if (!isBanned) allowedIndices.push(idx);
+      });
+
+      const pool = allowedIndices.length > 0 ? allowedIndices : names.map((_, i) => i);
+      const chosenIndex = pool[Math.floor(Math.random() * pool.length)];
+
+      isSpinning = true;
+      spinBtn.disabled = true;
+      resultDiv.textContent = 'جاري التدوير...';
+
+      const arc = (2 * Math.PI) / names.length;
+      const targetSegmentAngle = (chosenIndex * arc) + (arc / 2);
+      const pointerAngle = (3 * Math.PI) / 2;
+      let targetWheelAngle = pointerAngle - targetSegmentAngle;
+
+      const normalizedCurrent = currentAngle % (2 * Math.PI);
+      let diff = targetWheelAngle - normalizedCurrent;
+      while (diff < 0) diff += 2 * Math.PI;
+
+      const extraSpins = (5 + Math.floor(Math.random() * 3)) * (2 * Math.PI);
+      const finalAngle = currentAngle + diff + extraSpins;
+      const duration = 4500;
+      const startTime = performance.now();
+
+      let lastSector = Math.floor((currentAngle - pointerAngle) / arc);
+
+      function animate(now) {
+        const elapsed = now - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        const easeOut = 1 - Math.pow(1 - t, 3);
+        const currentSpin = currentAngle + (finalAngle - currentAngle) * easeOut;
+
+        // حساب انتقال القطاعات لإطلاق صوت النقرة
+        const currentSector = Math.floor((currentSpin - pointerAngle) / arc);
+        if (currentSector !== lastSector) {
+          playTickSound();
+          lastSector = currentSector;
+        }
+
+        drawWheel(currentSpin);
+
+        if (t < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          currentAngle = finalAngle;
+          isSpinning = false;
+          spinBtn.disabled = false;
+          resultDiv.textContent = `🎉 الفائز: ${names[chosenIndex]}`;
+          playWinSound();
+        }
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    input.addEventListener('input', () => {
+      if (!isSpinning) drawWheel(currentAngle);
+    });
+
+    spinBtn.addEventListener('click', spin);
+
+    drawWheel();
+  </script>
+</body>
+</html>
